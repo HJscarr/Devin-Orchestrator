@@ -21,7 +21,7 @@ uvicorn app.main:app --reload --port 8000
 # Health:    http://localhost:8000/health
 ```
 
-No test suite exists yet. The project has no Dockerfile or CI pipeline.
+No test suite exists yet. The project has no CI pipeline.
 
 ## Architecture
 
