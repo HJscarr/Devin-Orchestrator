@@ -1,12 +1,16 @@
 import asyncio
+import logging
 from datetime import datetime
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 from app.config import get_settings
+
+logger = logging.getLogger(__name__)
 from app.models import TriageStatus, issue_store
 from app.services.devin_service import DevinService
 from app.services.github_service import GitHubService
 from app.services.notification_service import NotificationService
+from app.utils import retry_async
 
 router = APIRouter(tags=["approve"])
 
@@ -17,6 +21,7 @@ notifications = NotificationService()
 
 async def _poll_fix_session(issue_number: int, session_id: str):
     """Background task: poll Devin until fix session completes."""
+    logger.info("Fix session started for issue #%d, session_id=%s", issue_number, session_id)
     tracked = issue_store[issue_number]
     tracked.status = TriageStatus.IN_PROGRESS
     tracked.updated_at = datetime.utcnow()
@@ -25,7 +30,7 @@ async def _poll_fix_session(issue_number: int, session_id: str):
 
     while True:
         await asyncio.sleep(30)
-        session = await devin.get_session(session_id)
+        session = await retry_async(lambda: devin.get_session(session_id))
         status = session.get("status")
         status_detail = session.get("status_detail", "")
 
@@ -36,12 +41,13 @@ async def _poll_fix_session(issue_number: int, session_id: str):
 
         # Also check GitHub directly (Devin API sometimes doesn't populate pull_requests)
         if not tracked.pr_url and tracked.status != TriageStatus.PR_OPEN:
-            pr_url = await github.find_pr_for_issue(issue_number)
+            pr_url = await retry_async(lambda: github.find_pr_for_issue(issue_number))
             if pr_url:
                 tracked.pr_url = pr_url
 
         # Notify on PR found
         if tracked.pr_url and tracked.status != TriageStatus.PR_OPEN:
+            logger.info("PR detected for issue #%d: %s", issue_number, tracked.pr_url)
             tracked.status = TriageStatus.PR_OPEN
             tracked.updated_at = datetime.utcnow()
             await github.post_comment(
@@ -56,7 +62,7 @@ async def _poll_fix_session(issue_number: int, session_id: str):
             break
         if status_detail == "waiting_for_user":
             # Session done but no PR — check GitHub one last time
-            pr_url = await github.find_pr_for_issue(issue_number)
+            pr_url = await retry_async(lambda: github.find_pr_for_issue(issue_number))
             if pr_url:
                 tracked.pr_url = pr_url
                 tracked.status = TriageStatus.PR_OPEN
@@ -68,8 +74,10 @@ async def _poll_fix_session(issue_number: int, session_id: str):
 
     if tracked.pr_url:
         tracked.status = TriageStatus.PR_OPEN
+        logger.info("Fix complete for issue #%d, PR: %s", issue_number, tracked.pr_url)
     elif status == "error":
         tracked.status = TriageStatus.FAILED
+        logger.error("Fix session failed for issue #%d: Devin reported error", issue_number)
         await github.post_comment(
             issue_number,
             "Devin encountered an error while working on this issue. "
@@ -123,6 +131,7 @@ async def approve_all_triaged(background_tasks: BackgroundTasks):
 @router.post("/approve/{issue_number}")
 async def approve_issue(issue_number: int, background_tasks: BackgroundTasks):
     """Approve an issue for Devin to fix. Must be triaged first."""
+    logger.info("Approval requested for issue #%d", issue_number)
     settings = get_settings()
 
     if issue_number not in issue_store:

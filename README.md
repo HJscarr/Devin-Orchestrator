@@ -11,19 +11,19 @@ FinServ Co has **300+ open GitHub issues** across their monorepo. Senior enginee
 This orchestrator sits between GitHub and Devin AI, turning a backlog of stale issues into a managed pipeline:
 
 ```
-┌─────────────┐      ┌──────────────────┐      ┌───────────┐
+┌────────────-─┐      ┌──────────────────┐      ┌───────────┐
 │   GitHub     │      │   Orchestrator   │      │  Devin AI │
 │   Issues     │─────▶│                  │─────▶│           │
 │              │      │  Triage → Approve│      │  Analyse  │
 │              │◀─────│  → Fix → Report  │◀─────│  Code     │
 │   PRs +      │      │                  │      │  Fix      │
-│   Comments   │      └───────┬──────────┘      └───────────┘
-└─────────────┘              │
+│   Comments   │      └──────┬──────-────┘      └───────────┘
+└──────────────┘             │
                     ┌────────┴────────┐
                     │                 │
               ┌─────▼─────┐   ┌──────▼──────┐
-              │ Dashboard │   │    Slack     │
-              │  (Web UI) │   │ Notifications│
+              │ Dashboard │   │    Slack    │
+              │  (Web UI) │   │Notifications│
               └───────────┘   └─────────────┘
 ```
 
@@ -120,3 +120,4 @@ app/
 - **Dual PR detection** — Checks both Devin's API and GitHub directly, since Devin's `pull_requests` field can lag behind actual PR creation.
 - **Sync recovery** — The `/sync` endpoint rebuilds state from Devin + GitHub APIs after a restart, since state is held in-memory.
 - **Human-in-the-loop** — Engineers approve which issues get fixed. Devin doesn't act autonomously on the codebase without explicit approval.
+

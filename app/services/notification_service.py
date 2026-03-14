@@ -1,6 +1,10 @@
+import logging
+
 import httpx
 from app.config import get_settings
 from app.models import TrackedIssue
+
+logger = logging.getLogger(__name__)
 
 
 SEVERITY_EMOJI = {"critical": "\U0001f534", "high": "\U0001f534", "medium": "\U0001f7e1", "low": "\U0001f7e2"}
@@ -16,7 +20,9 @@ class NotificationService:
 
     async def notify_triage_complete(self, issue: TrackedIssue):
         if not self.webhook_url:
+            logger.warning("Slack webhook URL not configured, skipping triage notification for issue #%d", issue.issue_number)
             return
+        logger.info("Sending triage-complete Slack notification for issue #%d", issue.issue_number)
 
         triage = issue.triage_result
         sev_emoji = SEVERITY_EMOJI.get(triage.severity, "\u26aa")
@@ -69,7 +75,9 @@ class NotificationService:
 
     async def notify_fix_started(self, issue: TrackedIssue):
         if not self.webhook_url:
+            logger.warning("Slack webhook URL not configured, skipping fix-started notification for issue #%d", issue.issue_number)
             return
+        logger.info("Sending fix-started Slack notification for issue #%d", issue.issue_number)
 
         blocks = [
             {
@@ -93,7 +101,9 @@ class NotificationService:
 
     async def notify_pr_opened(self, issue: TrackedIssue):
         if not self.webhook_url:
+            logger.warning("Slack webhook URL not configured, skipping PR-opened notification for issue #%d", issue.issue_number)
             return
+        logger.info("Sending PR-opened Slack notification for issue #%d", issue.issue_number)
 
         blocks = [
             {

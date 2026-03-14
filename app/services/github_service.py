@@ -1,5 +1,9 @@
+import logging
+
 import httpx
 from app.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 class GitHubService:
@@ -46,6 +50,7 @@ class GitHubService:
 
     async def post_comment(self, issue_number: int, body: str):
         """Post a comment on an issue."""
+        logger.info("Posting comment on issue #%d", issue_number)
         async with httpx.AsyncClient(follow_redirects=True) as client:
             resp = await client.post(
                 f"{self.base_url}/issues/{issue_number}/comments",
@@ -57,6 +62,7 @@ class GitHubService:
 
     async def find_pr_for_issue(self, issue_number: int) -> str | None:
         """Check if a PR referencing this issue exists. Returns the PR URL or None."""
+        logger.info("Looking up PRs for issue #%d", issue_number)
         async with httpx.AsyncClient(follow_redirects=True) as client:
             resp = await client.get(
                 f"{self.base_url}/pulls",
@@ -78,6 +84,7 @@ class GitHubService:
 
     async def add_labels(self, issue_number: int, labels: list[str]):
         """Add labels to an issue."""
+        logger.info("Adding labels to issue #%d: %s", issue_number, labels)
         async with httpx.AsyncClient(follow_redirects=True) as client:
             resp = await client.post(
                 f"{self.base_url}/issues/{issue_number}/labels",

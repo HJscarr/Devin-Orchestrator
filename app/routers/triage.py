@@ -1,12 +1,16 @@
 import asyncio
+import logging
 from datetime import datetime
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 from app.config import get_settings
+
+logger = logging.getLogger(__name__)
 from app.models import TrackedIssue, TriageResult, TriageStatus, issue_store
 from app.services.github_service import GitHubService
 from app.services.devin_service import DevinService
 from app.services.notification_service import NotificationService
+from app.utils import retry_async
 
 router = APIRouter(tags=["triage"])
 
@@ -18,10 +22,13 @@ notifications = NotificationService()
 async def _poll_triage_session(issue_number: int, session_id: str):
     """Background task: poll Devin until triage session completes."""
     tracked = issue_store[issue_number]
+    poll_count = 0
 
     while True:
         await asyncio.sleep(15)
-        session = await devin.get_session(session_id)
+        poll_count += 1
+        logger.info("Polling triage session for issue #%d (iteration %d)", issue_number, poll_count)
+        session = await retry_async(lambda: devin.get_session(session_id))
         status = session.get("status")
         status_detail = session.get("status_detail", "")
 
@@ -68,9 +75,11 @@ async def _poll_triage_session(issue_number: int, session_id: str):
         await github.add_labels(issue_number, labels)
 
         await notifications.notify_triage_complete(tracked)
+        logger.info("Triage complete for issue #%d: severity=%s category=%s", issue_number, triage.severity, triage.category)
     else:
         tracked.status = TriageStatus.FAILED
         tracked.updated_at = datetime.utcnow()
+        logger.error("Triage failed for issue #%d: no structured output received", issue_number)
 
 
 @router.post("/sync")
@@ -200,6 +209,7 @@ async def triage_single_issue(
     issue_number: int, background_tasks: BackgroundTasks
 ):
     """Triage a single issue by number."""
+    logger.info("Starting triage for issue #%d", issue_number)
     settings = get_settings()
     issue = await github.get_issue(issue_number)
 

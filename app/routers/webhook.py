@@ -1,11 +1,14 @@
 import json
 import hashlib
 import hmac
+import logging
 from datetime import datetime
 from fastapi import APIRouter, BackgroundTasks, Request, HTTPException, Form
 from fastapi.responses import JSONResponse
 
 from app.models import TrackedIssue, TriageStatus, issue_store
+
+logger = logging.getLogger(__name__)
 from app.routers.triage import _poll_triage_session
 from app.routers.approve import _poll_fix_session
 from app.config import get_settings
@@ -25,6 +28,7 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
     """Handle GitHub webhook events for new/updated issues."""
     event = request.headers.get("X-GitHub-Event", "")
     payload = await request.json()
+    logger.info("GitHub webhook received: event=%s action=%s", event, payload.get("action"))
 
     if event != "issues":
         return {"message": f"Ignored event: {event}"}
@@ -35,6 +39,7 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
 
     issue = payload["issue"]
     issue_number = issue["number"]
+    logger.info("Processing %s issue #%d", action, issue_number)
     settings = get_settings()
 
     tracked = TrackedIssue(

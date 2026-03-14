@@ -1,5 +1,9 @@
+import logging
+
 import httpx
 from app.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 # Structured output schema for Devin triage sessions.
 # Devin will return JSON matching this schema.
@@ -80,7 +84,9 @@ class DevinService:
                 timeout=30.0,
             )
             resp.raise_for_status()
-            return resp.json()
+            data = resp.json()
+            logger.info("Triage session created for issue #%d: session_id=%s", issue_number, data.get("session_id"))
+            return data
 
     async def create_fix_session(
         self, issue_number: int, issue_title: str, issue_body: str,
@@ -121,7 +127,9 @@ class DevinService:
                 timeout=30.0,
             )
             resp.raise_for_status()
-            return resp.json()
+            data = resp.json()
+            logger.info("Fix session created for issue #%d: session_id=%s", issue_number, data.get("session_id"))
+            return data
 
     async def get_session(self, session_id: str) -> dict:
         """Get the current status of a Devin session via the list endpoint."""
@@ -137,8 +145,11 @@ class DevinService:
             resp.raise_for_status()
             items = resp.json().get("items", [])
             if not items:
+                logger.warning("Session %s not found in list response", session_id)
                 return {"status": "unknown"}
-            return items[0]
+            session = items[0]
+            logger.info("Session %s poll: status=%s detail=%s", session_id, session.get("status"), session.get("status_detail", ""))
+            return session
 
     async def list_sessions(self, tag: str = None) -> list[dict]:
         """List Devin sessions, optionally filtered by tag."""
