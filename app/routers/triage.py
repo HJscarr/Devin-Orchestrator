@@ -23,11 +23,17 @@ async def _poll_triage_session(issue_number: int, session_id: str):
         await asyncio.sleep(15)
         session = await devin.get_session(session_id)
         status = session.get("status")
+        status_detail = session.get("status_detail", "")
 
-        if status in ("exit", "error", "suspended"):
+        # Triage is done when structured_output appears, or session reaches a terminal state
+        if session.get("structured_output"):
+            break
+        if status_detail == "waiting_for_user":
+            break
+        if status in ("blocked", "finished", "exit", "error", "suspended"):
             break
 
-    if status == "exit" and session.get("structured_output"):
+    if session.get("structured_output"):
         output = session["structured_output"]
         triage = TriageResult(**output)
         tracked.triage_result = triage
@@ -65,6 +71,83 @@ async def _poll_triage_session(issue_number: int, session_id: str):
     else:
         tracked.status = TriageStatus.FAILED
         tracked.updated_at = datetime.utcnow()
+
+
+@router.post("/sync")
+async def sync_existing_sessions():
+    """Pull already-completed triage sessions and PRs from Devin + GitHub into the local store.
+
+    Useful after a server restart to recover state without creating new sessions.
+    """
+    issues = await github.get_open_issues()
+    synced = []
+
+    for issue in issues:
+        number = issue["number"]
+        tag = f"issue-{number}"
+        sessions = await devin.list_sessions(tag=tag)
+
+        # Find the most recent triage session with structured output
+        triage_session = None
+        fix_session = None
+        for s in sessions:
+            if "triage" in s.get("tags", []) and s.get("structured_output") and not triage_session:
+                triage_session = s
+            if "fix" in s.get("tags", []) and not fix_session:
+                fix_session = s
+
+        if not triage_session:
+            continue
+
+        tracked = TrackedIssue(
+            issue_number=number,
+            title=issue["title"],
+            body=issue.get("body", "") or "",
+            labels=[l["name"] for l in issue.get("labels", [])],
+        )
+        tracked.devin_session_id = triage_session["session_id"]
+        tracked.devin_session_url = triage_session.get("url")
+
+        triage = TriageResult(**triage_session["structured_output"])
+        tracked.triage_result = triage
+        tracked.status = TriageStatus.TRIAGED
+        tracked.updated_at = datetime.utcnow()
+
+        # If a fix session exists, check for PR
+        if fix_session:
+            tracked.devin_session_id = fix_session["session_id"]
+            tracked.devin_session_url = fix_session.get("url")
+            tracked.status = TriageStatus.IN_PROGRESS
+
+            # Check Devin API for PR
+            prs = fix_session.get("pull_requests", [])
+            if prs:
+                tracked.pr_url = prs[0].get("url", "")
+                tracked.status = TriageStatus.PR_OPEN
+
+            # Also check GitHub directly
+            if not tracked.pr_url:
+                pr_url = await github.find_pr_for_issue(number)
+                if pr_url:
+                    tracked.pr_url = pr_url
+                    tracked.status = TriageStatus.PR_OPEN
+
+            # If fix session errored out, mark as failed
+            if fix_session.get("status") == "error":
+                tracked.status = TriageStatus.FAILED
+
+            # If fix session is done but no PR was found, fall back to TRIAGED
+            # so the "Create PR" button appears again
+            if tracked.status == TriageStatus.IN_PROGRESS and not tracked.pr_url:
+                fix_status = fix_session.get("status", "")
+                fix_detail = fix_session.get("status_detail", "")
+                if fix_detail == "waiting_for_user" or fix_status in ("finished", "exit", "suspended", "blocked"):
+                    tracked.status = TriageStatus.TRIAGED
+
+        issue_store[number] = tracked
+        synced.append(number)
+
+    return {"message": f"Synced {len(synced)} issues", "issues": synced}
 
 
 @router.post("/triage")

@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
 
 from app.routers import triage, approve, status, webhook
 
@@ -15,6 +16,11 @@ app.include_router(triage.router)
 app.include_router(approve.router)
 app.include_router(status.router)
 app.include_router(webhook.router)
+
+
+@app.get("/")
+def root():
+    return RedirectResponse(url="/dashboard")
 
 
 @app.get("/health")

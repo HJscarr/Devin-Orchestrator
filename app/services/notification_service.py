@@ -3,6 +3,10 @@ from app.config import get_settings
 from app.models import TrackedIssue
 
 
+SEVERITY_EMOJI = {"critical": "\U0001f534", "high": "\U0001f534", "medium": "\U0001f7e1", "low": "\U0001f7e2"}
+EFFORT_EMOJI = {"small": "\U0001f7e2", "medium": "\U0001f7e1", "large": "\U0001f534"}
+
+
 class NotificationService:
     """Sends notifications to Slack when issue status changes."""
 
@@ -15,29 +19,49 @@ class NotificationService:
             return
 
         triage = issue.triage_result
+        sev_emoji = SEVERITY_EMOJI.get(triage.severity, "\u26aa")
+        eff_emoji = EFFORT_EMOJI.get(triage.estimated_effort, "\u26aa")
+
         blocks = [
             {
-                "type": "header",
+                "type": "section",
                 "text": {
-                    "type": "plain_text",
-                    "text": f"Issue #{issue.issue_number} triaged",
+                    "type": "mrkdwn",
+                    "text": (
+                        f"\U0001f50d *Triage complete \u2014 #{issue.issue_number}*\n"
+                        f"{issue.title}"
+                    ),
                 },
             },
             {
                 "type": "section",
                 "fields": [
-                    {"type": "mrkdwn", "text": f"*Title:*\n{issue.title}"},
-                    {"type": "mrkdwn", "text": f"*Severity:*\n{triage.severity}"},
-                    {"type": "mrkdwn", "text": f"*Effort:*\n{triage.estimated_effort}"},
-                    {"type": "mrkdwn", "text": f"*Category:*\n{triage.category}"},
+                    {"type": "mrkdwn", "text": f"*Severity:*  {sev_emoji} {triage.severity.capitalize()}"},
+                    {"type": "mrkdwn", "text": f"*Effort:*  {eff_emoji} {triage.estimated_effort.capitalize()}"},
+                    {"type": "mrkdwn", "text": f"*Confidence:*  {int(triage.confidence * 100)}%"},
                 ],
             },
             {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"*Suggested approach:*\n{triage.suggested_approach}",
-                },
+                "type": "context",
+                "elements": [
+                    {"type": "mrkdwn", "text": f"{triage.suggested_approach[:280]}"},
+                ],
+            },
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "View Session"},
+                        "url": issue.devin_session_url or "",
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "Create PR"},
+                        "action_id": f"approve_{issue.issue_number}",
+                        "style": "primary",
+                    },
+                ],
             },
         ]
 
@@ -53,10 +77,14 @@ class NotificationService:
                 "text": {
                     "type": "mrkdwn",
                     "text": (
-                        f"Devin is now working on *#{issue.issue_number}: "
-                        f"{issue.title}*\n"
-                        f"<{issue.devin_session_url}|View Devin session>"
+                        f"\U0001f6e0\ufe0f *Fix in progress \u2014 #{issue.issue_number}*\n"
+                        f"{issue.title}"
                     ),
+                },
+                "accessory": {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "Watch Devin"},
+                    "url": issue.devin_session_url or "",
                 },
             },
         ]
@@ -73,10 +101,26 @@ class NotificationService:
                 "text": {
                     "type": "mrkdwn",
                     "text": (
-                        f"PR opened for *#{issue.issue_number}: {issue.title}*\n"
-                        f"<{issue.pr_url}|Review PR>"
+                        f"\u2705 *PR ready for review \u2014 #{issue.issue_number}*\n"
+                        f"{issue.title}"
                     ),
                 },
+            },
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "Review PR"},
+                        "url": issue.pr_url or "",
+                        "style": "primary",
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "View Session"},
+                        "url": issue.devin_session_url or "",
+                    },
+                ],
             },
         ]
 

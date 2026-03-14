@@ -46,6 +46,8 @@ class DevinService:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+        self.triage_playbook_id = settings.triage_playbook_id
+        self.fix_playbook_id = settings.fix_playbook_id
 
     async def create_triage_session(
         self, issue_number: int, issue_title: str, issue_body: str, repo: str
@@ -67,6 +69,8 @@ class DevinService:
             "repos": [repo],
             "structured_output_schema": TRIAGE_OUTPUT_SCHEMA,
         }
+        if self.triage_playbook_id:
+            payload["playbook_id"] = self.triage_playbook_id
 
         async with httpx.AsyncClient() as client:
             resp = await client.post(
@@ -92,6 +96,10 @@ class DevinService:
             f"- Create a branch named `fix/issue-{issue_number}`\n"
             f"- Implement the fix following the suggested approach\n"
             f"- Write or update tests if applicable\n"
+            f"- Verify your fix by running: pytest tests/test_bug{issue_number}_*.py -v\n"
+            f"- Update .github/workflows/tests.yml so the CI step runs ONLY "
+            f"the test for this bug: pytest tests/test_bug{issue_number}_*.py -v "
+            f"(this ensures the PR shows a green check for the specific fix)\n"
             f"- Open a PR referencing issue #{issue_number}\n"
             f"- PR title should start with 'Fix #{issue_number}:'"
         )
@@ -102,6 +110,8 @@ class DevinService:
             "tags": [f"issue-{issue_number}", "fix"],
             "repos": [repo],
         }
+        if self.fix_playbook_id:
+            payload["playbook_id"] = self.fix_playbook_id
 
         async with httpx.AsyncClient() as client:
             resp = await client.post(
@@ -114,15 +124,21 @@ class DevinService:
             return resp.json()
 
     async def get_session(self, session_id: str) -> dict:
-        """Get the current status of a Devin session."""
+        """Get the current status of a Devin session via the list endpoint."""
+        # The v3 single-session GET returns 403 with service-user keys,
+        # so we use the list endpoint filtered by session_id instead.
         async with httpx.AsyncClient() as client:
             resp = await client.get(
-                f"{self.base_url}/sessions/{session_id}",
+                f"{self.base_url}/sessions",
                 headers=self.headers,
+                params={"session_id": session_id, "limit": 1},
                 timeout=30.0,
             )
             resp.raise_for_status()
-            return resp.json()
+            items = resp.json().get("items", [])
+            if not items:
+                return {"status": "unknown"}
+            return items[0]
 
     async def list_sessions(self, tag: str = None) -> list[dict]:
         """List Devin sessions, optionally filtered by tag."""
@@ -137,7 +153,7 @@ class DevinService:
                 timeout=30.0,
             )
             resp.raise_for_status()
-            return resp.json().get("sessions", [])
+            return resp.json().get("items", [])
 
     async def send_message(self, session_id: str, message: str) -> dict:
         """Send a follow-up message to a running Devin session."""

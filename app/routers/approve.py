@@ -27,14 +27,23 @@ async def _poll_fix_session(issue_number: int, session_id: str):
         await asyncio.sleep(30)
         session = await devin.get_session(session_id)
         status = session.get("status")
+        status_detail = session.get("status_detail", "")
 
-        # Check if Devin opened a PR
+        # Check Devin API for PR
         pull_requests = session.get("pull_requests", [])
         if pull_requests and tracked.status != TriageStatus.PR_OPEN:
             tracked.pr_url = pull_requests[0].get("url", "")
+
+        # Also check GitHub directly (Devin API sometimes doesn't populate pull_requests)
+        if not tracked.pr_url and tracked.status != TriageStatus.PR_OPEN:
+            pr_url = await github.find_pr_for_issue(issue_number)
+            if pr_url:
+                tracked.pr_url = pr_url
+
+        # Notify on PR found
+        if tracked.pr_url and tracked.status != TriageStatus.PR_OPEN:
             tracked.status = TriageStatus.PR_OPEN
             tracked.updated_at = datetime.utcnow()
-
             await github.post_comment(
                 issue_number,
                 f"Devin has opened a PR to fix this issue: {tracked.pr_url}\n\n"
@@ -42,10 +51,22 @@ async def _poll_fix_session(issue_number: int, session_id: str):
             )
             await notifications.notify_pr_opened(tracked)
 
-        if status in ("exit", "error", "suspended"):
+        # Done when PR is found, or session is done
+        if tracked.pr_url:
+            break
+        if status_detail == "waiting_for_user":
+            # Session done but no PR — check GitHub one last time
+            pr_url = await github.find_pr_for_issue(issue_number)
+            if pr_url:
+                tracked.pr_url = pr_url
+                tracked.status = TriageStatus.PR_OPEN
+                tracked.updated_at = datetime.utcnow()
+                await notifications.notify_pr_opened(tracked)
+            break
+        if status in ("blocked", "finished", "exit", "error", "suspended"):
             break
 
-    if status == "exit" and tracked.pr_url:
+    if tracked.pr_url:
         tracked.status = TriageStatus.PR_OPEN
     elif status == "error":
         tracked.status = TriageStatus.FAILED
@@ -55,6 +76,48 @@ async def _poll_fix_session(issue_number: int, session_id: str):
             "Manual intervention may be required.",
         )
     tracked.updated_at = datetime.utcnow()
+
+
+@router.post("/approve-all")
+async def approve_all_triaged(background_tasks: BackgroundTasks):
+    """Approve all triaged issues for Devin to fix."""
+    settings = get_settings()
+    approved = []
+
+    for number, tracked in issue_store.items():
+        if tracked.status != TriageStatus.TRIAGED:
+            continue
+
+        approach = tracked.triage_result.suggested_approach if tracked.triage_result else ""
+        session = await devin.create_fix_session(
+            issue_number=number,
+            issue_title=tracked.title,
+            issue_body=tracked.body,
+            triage_approach=approach,
+            repo=settings.github_repo,
+        )
+
+        tracked.status = TriageStatus.APPROVED
+        tracked.devin_session_id = session["session_id"]
+        tracked.devin_session_url = session.get("url")
+        tracked.updated_at = datetime.utcnow()
+
+        await github.post_comment(
+            number,
+            f"This issue has been approved for automated fixing. "
+            f"Devin is now working on it.\n\n"
+            f"[View Devin session]({session.get('url', '')})",
+        )
+
+        background_tasks.add_task(
+            _poll_fix_session, number, session["session_id"]
+        )
+        approved.append(number)
+
+    return {
+        "message": f"Fix sessions started for {len(approved)} issues",
+        "issues": approved,
+    }
 
 
 @router.post("/approve/{issue_number}")
@@ -70,11 +133,12 @@ async def approve_issue(issue_number: int, background_tasks: BackgroundTasks):
 
     tracked = issue_store[issue_number]
 
-    if tracked.status != TriageStatus.TRIAGED:
+    allowed = {TriageStatus.TRIAGED, TriageStatus.FAILED, TriageStatus.IN_PROGRESS}
+    if tracked.status not in allowed:
         raise HTTPException(
             status_code=400,
-            detail=f"Issue #{issue_number} is in status '{tracked.status}'. "
-            f"Only triaged issues can be approved.",
+            detail=f"Issue #{issue_number} is in status '{tracked.status.value}'. "
+            f"Cannot approve.",
         )
 
     approach = ""
